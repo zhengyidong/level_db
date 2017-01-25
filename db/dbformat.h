@@ -35,7 +35,6 @@ inline Slice ExtractUserKey(const Slice &internal_key) {
 
 extern void AppendInternalKey(std::string *result, const ParsedInternalKey &key);
 
-
 class InternalKeyComparator : public Comparator {
 private:
   const Comparator *user_comparator_;

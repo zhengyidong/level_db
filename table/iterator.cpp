@@ -12,7 +12,7 @@ Iterator::~Iterator() {
     (*cleanup_.function)(cleanup_.arg1, cleanup_.arg2);
     for (Cleanup *c = cleanup_.next; c != NULL; ) {
       (*c->function)(c->arg1, c->arg2);
-      Clenaup *next = c->next;
+      Cleanup *next = c->next;
       delete c;
       c = next;
     }
@@ -37,7 +37,7 @@ void Iterator::RegisterCleanup(CleanupFunction func, void *arg1, void *arg2) {
 namespace {
 class EmptyIterator : public Iterator {
 public:
-  EmptyIterator(const Status &s) : { status_(s); }
+  EmptyIterator(const Status &s) : status_(s) {}
   virtual bool Valid() const { return false; }
   virtual void Seek(const Slice& target) { }
   virtual void SeekToFirst() { }

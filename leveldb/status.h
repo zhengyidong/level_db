@@ -52,6 +52,7 @@ private:
   Status(Code code, const Slice &msg, const Slice &msg2);
   static const char *CopyState(const char *s);
 };
+
 inline Status::Status(const Status &s) {
   state_ = (s.state_ == NULL) ? NULL : CopyState(s.state_);
 }

@@ -10,14 +10,14 @@ public:
   Iterator();
   virtual ~Iterator();
   virtual bool Valid() const = 0;
-  virtual bool SeekToFirst() const = 0;
-  virtual bool SeekToLast() const = 0;
-  virtual bool Seek(const Slice &target) = 0;
+  virtual void SeekToFirst() = 0;
+  virtual void SeekToLast() = 0;
+  virtual void Seek(const Slice &target) = 0;
   virtual void Next() = 0;
   virtual void Prev() = 0;
-  virtual Slice key() = 0;
-  virtual Slice value() = 0;
-  virtual Status status() = 0;
+  virtual Slice key() const = 0;
+  virtual Slice value() const = 0;
+  virtual Status status() const = 0;
   typedef void(*CleanupFunction)(void *arg1, void *arg2);
   void RegisterCleanup(CleanupFunction function, void *arg1, void *arg2);
 

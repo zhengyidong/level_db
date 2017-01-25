@@ -2,8 +2,9 @@
 #define UTIL_ARENA_H
 
 #include <stddef.h>
-#include <assert.h>
 #include <vector>
+#include <assert.h>
+#include <stdint.h>
 
 namespace leveldb {
 
@@ -13,6 +14,10 @@ public:
   ~Arena();
 
   char *Allocate(size_t bytes);
+  char *AllocateAligned(size_t bytes);
+  size_t MemoryUsage() const {
+    return blocks_memory_ + blocks_.capacity() * sizeof(char*);
+  }
 private:
   char *AllocateFallback(size_t bytes);
   char *AllocateNewBlock(size_t block_bytes);

@@ -50,6 +50,12 @@ char *EncodeVarint32(char *dst, uint32_t v) {
   return reinterpret_cast<char*>(ptr);
 }
 
+void PutVarint32(std::string *dst, uint32_t value) {
+  char buf[5];
+  char * ptr = EncodeVarint32(buf, value);
+  dst->append(buf, ptr - buf);
+}
+
 char *EncodeVarint64(char *dst, uint64_t v) {
   static const int B = 128;
   unsigned char *ptr = reinterpret_cast<unsigned char*>(dst);
@@ -59,6 +65,12 @@ char *EncodeVarint64(char *dst, uint64_t v) {
   }
   *(ptr++) = static_cast<unsigned char>(v);
   return reinterpret_cast<char*>(ptr);
+}
+
+
+void PutLengthPrefixedSlice(std::string* dst, const Slice& value) {
+  PutVarint32(dst, value.size());
+  dst->append(value.data(), value.size());
 }
 
 int VarintLength(uint64_t v) {
@@ -84,6 +96,42 @@ const char *GetVarint32PtrFallback(const char *p,
       *value = result;
       return (reinterpret_cast<const char *>(p));
     }
+  }
+  return NULL;
+}
+
+bool GetVarint32(Slice *input, uint32_t *value) {
+  const char *p = input->data();
+  const char *limit = p + input->size();
+  const char *q = GetVarint32Ptr(p, limit, value);
+  if (q == NULL) {
+    return false;
+  } else {
+    *input = Slice(q, limit - q);
+    return true;
+  }
+}
+
+const char *GetLengthPrefixedSlice(const char *p, const char *limit,
+                                   Slice *result) {
+  uint32_t len;
+  p = GetVarint32Ptr(p, limit, &len);
+  if (p == NULL) return NULL;
+  if (p + len > limit) return NULL;
+  *result = Slice(p, len);
+  return p + len;
+}
+
+// comment @ 2017/01/25 by ZYD
+// Note that GetVarint32 will change the content of 'input'.
+bool GetLengthPrefixedSlice(Slice *input, Slice *result) {
+  uint32_t len;
+  if (GetVarint32(input, &len) && input->size() >= len) {
+    *result = Slice(input->data(), len);
+    input->remove_prefix(len);
+    return true;
+  } else {
+    return false;
   }
 }
 

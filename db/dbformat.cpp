@@ -32,4 +32,22 @@ LookupKey::LookupKey(const Slice &user_key, SequenceNumber s) {
   end_ = dst;
 }
 
+const char *InternalKeyComparator::Name() const {
+  return "leveldb.InternalKeyComparator";
+}
+
+int InternalKeyComparator::Compare(const Slice &a, const Slice &b) const {
+  int r = user_comparator_->Compare(ExtractUserKey(a), ExtractUserKey(b));
+  if (r == 0) {
+    const uint64_t anum = DecodeFixed64(a.size() + a.data() - 8);
+    const uint64_t bnum = DecodeFixed64(b.size() + b.data() - 8);
+    if (anum > bnum) {
+      r = -1;
+    } else if (anum < bnum) {
+      r = +1;
+    }
+  }
+  return r;
+}
+
 }

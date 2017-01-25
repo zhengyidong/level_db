@@ -1,4 +1,6 @@
 #include "db/memtable.h"
+#include "leveldb/comparator.h"
+#include "util/coding.h"
 
 namespace leveldb {
 
@@ -9,14 +11,58 @@ static Slice GetLengthPrefixedSlice(const char *data) {
   return Slice(p, len);
 }
 
+MemTable::MemTable(const InternalKeyComparator &comparator)
+  : comparator_(comparator),
+    refs_(0),
+    table_(comparator_, &arena_) {
+}
+
+
 MemTable::~MemTable() {
   assert(refs_ == 0);
 }
+
+size_t MemTable::ApproximateMemoryUsage() { return arena_.MemoryUsage(); }
 
 int MemTable::KeyComparator::operator()(const char *aptr, const char *bptr) const {
   Slice a = GetLengthPrefixedSlice(aptr);
   Slice b = GetLengthPrefixedSlice(bptr);
   return comparator.Compare(a, b);
+}
+
+static const char *EncodeKey(std::string *scratch, const Slice &target) {
+  scratch->clear();
+  PutVarint32(scratch, target.size());
+  scratch->append(target.data(), target.size());
+  return scratch->data();
+}
+
+class MemTableIterator : public Iterator {
+public:
+  explicit MemTableIterator(MemTable::Table *table) : iter_(table) {}
+  virtual bool Valid() const { return iter_.Valid(); }
+  virtual void Seek(const Slice &k) { iter_.Seek(EncodeKey(&tmp_, k)); }
+  virtual void SeekToFirst() { iter_.SeekToFirst(); }
+  virtual void SeekToLast() { iter_.SeekToLast(); }
+  virtual void Next() { iter_.Next(); }
+  virtual void Prev() { iter_.Prev(); }
+  virtual Slice key() const { return GetLengthPrefixedSlice(iter_.key()); }
+  virtual Slice value() const {
+    Slice key_slice = GetLengthPrefixedSlice(iter_.key());
+    return GetLengthPrefixedSlice(key_slice.data() + key_slice.size());
+  }
+  virtual Status status() const { return Status::OK(); }
+private:
+  MemTable::Table::Iterator iter_;
+  std::string tmp_;
+
+  // No copying allowed
+  MemTableIterator(const MemTableIterator&);
+  void operator=(const MemTableIterator&);
+};
+
+Iterator *MemTable::NewIterator() {
+  return new MemTableIterator(&table_);
 }
 
 void MemTable::Add(SequenceNumber seq, ValueType type,
@@ -37,6 +83,34 @@ void MemTable::Add(SequenceNumber seq, ValueType type,
   p = EncodeVarint32(p, val_size);
   memcpy(p, value.data(), val_size);
   assert((p + val_size) - buf == encoded_len);
+  table_.Insert(buf);
+}
 
+bool MemTable::Get(const LookupKey &key, std::string *value, Status *s) {
+  Slice memkey = key.memtable_key();
+  Table::Iterator iter(&table_);
+  iter.Seek(memkey.data());
+  if (iter.Valid()) {
+    const char *entry = iter.key();
+    uint32_t key_length;
+    const char *key_ptr = GetVarint32Ptr(entry, entry + 5, &key_length);
+    if (comparator_.comparator.user_comparator()->Compare(
+          Slice(key_ptr, key_length - 8),
+          key.user_key()) == 0) {
+      const uint64_t tag = DecodeFixed64(key_ptr + key_length - 8);
+      switch (static_cast<ValueType>(tag & 0xff)) {
+      case kTypeValue : {
+        Slice v = GetLengthPrefixedSlice(key_ptr + key_length);
+        value->assign(v.data(), v.size());
+        return true;
+      }
+      case kTypeDeletion: {
+        *s = Status::NotFound(Slice());
+        return true;
+      }
+      }
+    }
+  }
+  return false;
 }
 }

@@ -24,6 +24,13 @@ public:
   }
   void clear() { data_ = ""; size_ = 0; }
 
+  // Drop the first "n" bytes from this slice.
+  void remove_prefix(size_t n) {
+    assert(n <= size());
+    data_ += n;
+    size_ -= n;
+  }
+
   std::string ToString() const { return std::string(data_, size_); }
 
   int compare(const Slice &b) const;

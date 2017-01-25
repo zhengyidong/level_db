@@ -8,6 +8,8 @@
 
 namespace leveldb {
 
+class MemTableIterator;
+
 class MemTable {
 public:
   explicit MemTable(const InternalKeyComparator &comparator);
@@ -21,6 +23,8 @@ public:
     }
   }
 
+  size_t ApproximateMemoryUsage();
+  Iterator *NewIterator();
   void Add(SequenceNumber seq, ValueType type, const Slice &key, const Slice &value);
   bool Get(const LookupKey &key, std::string *value, Status *s);
 private:
@@ -31,8 +35,11 @@ private:
     explicit KeyComparator(const InternalKeyComparator &c) : comparator(c) {}
     int operator()(const char *a, const char *b) const;
   };
+  friend class MemTableIterator;
 
   typedef SkipList<const char*, KeyComparator> Table;
+
+  KeyComparator comparator_;
   int refs_;
   Arena arena_;
   Table table_;
