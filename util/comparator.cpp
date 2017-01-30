@@ -18,17 +18,15 @@ public:
     return a.compare(b);
   }
 };
+}
 
 static port::OnceType once = LEVELDB_ONCE_INIT;
 static const Comparator *bytewise;
-
 static void InitModule() {
   bytewise = new BytewiseComparatorImpl;
 }
-
 const Comparator *BytewiseComparator() {
   port::InitOnce(&once, InitModule);
   return bytewise;
-}
 }
 }

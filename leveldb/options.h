@@ -8,6 +8,7 @@ namespace leveldb {
 class Cache;
 class Comparator;
 class Env;
+class FilterPolicy;
 class Logger;
 class Snapshot;
 
@@ -26,26 +27,46 @@ struct Options {
   size_t write_buffer_size;
   int max_open_files;
   Cache *block_cache;
+
+  // Approximate size of user data packed per block.  Note that the
+  // block size specified here corresponds to uncompressed data.  The
+  // actual size of the unit read from disk may be smaller if
+  // compression is enabled.  This parameter can be changed dynamically.
+  //
+  // Default: 4K
+  size_t block_size;
+
+  // Number of keys between restart points for delta encoding of keys.
+  // This parameter can be changed dynamically.  Most clients should
+  // leave this parameter alone.
+  //
+  // Default: 16
+  int block_restart_interval;
+
   CompressionType compression;
   const FilterPolicy *filter_policy;
   Options();
+
 };
 
-struct ReadOption {
+struct ReadOptions {
+  // If true, all data read from underlying storage will be
+  // verified against corresponding checksums.
+  // Default: false
   bool verify_checksums;
   bool fill_cache;
   const Snapshot *snapshot;
 
-  ReadOption()
+  ReadOptions()
     : verify_checksums(false),
       fill_cache(true),
       snapshot(NULL) {}
 };
 
-struct WriteOption {
+struct WriteOptions {
   bool sync;
 
-  WriteOption()
+  WriteOptions()
     : sync(false) {}
 };
 

@@ -18,7 +18,7 @@ public:
   const char *data() const { return data_; }
   size_t size() const { return size_; }
   bool empty() const { return size_ == 0; }
-  char operator[](size_t n) {
+  char operator[](size_t n) const {
     assert(n < size());
     return data_[n];
   }
@@ -34,6 +34,12 @@ public:
   std::string ToString() const { return std::string(data_, size_); }
 
   int compare(const Slice &b) const;
+
+  // Return true iff "x" is a prefix of "*this"
+  bool starts_with(const Slice& x) const {
+    return ((size_ >= x.size_) &&
+            (memcmp(data_, x.data_, x.size_) == 0));
+  }
 private:
   const char *data_;
   size_t size_;

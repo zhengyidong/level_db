@@ -73,5 +73,50 @@ private:
 
 class PosixMmapReadableFile : public RandomAccessFile {
 };
+
+class PosixEnv : public Env {
+public:
+  virtual Status NewSequentialFile(const std::string &fname, SequentialFile **result) {
+    FILE *f = fopen(fname.c_str(), "r");
+    if (f == NULL) {
+      *result = NULL;
+      return IOError(fname, errno);
+    } else {
+      *result = new PosixSequentialFile(fname, f);
+      return Status::OK();
+    }
+  }
+
+  virtual Status NewWritableFile(const std::string &fname, WritableFile **result) {
+    return Status::NotFound("");
+  }
+
+  virtual Status DeleteFile(const std::string &fname) {
+    Status result;
+    if (unlink(fname.c_str()) != 0) {
+      result = IOError(fname, errno);
+    }
+    return result;
+  }
+
+  virtual Status RenameFile(const std::string &src, const std::string &target) {
+    Status result;
+    if (rename(src.c_str(), target.c_str()) != 0) {
+      result = IOError(src, errno);
+    }
+    return result;
+  }
+
+};
 }
+
+static pthread_once_t once = PTHREAD_ONCE_INIT;
+static Env* default_env;
+static void InitDefaultEnv() { default_env = new PosixEnv; }
+
+Env* Env::Default() {
+  pthread_once(&once, InitDefaultEnv);
+  return default_env;
+}
+
 }

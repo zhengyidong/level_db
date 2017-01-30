@@ -67,6 +67,11 @@ char *EncodeVarint64(char *dst, uint64_t v) {
   return reinterpret_cast<char*>(ptr);
 }
 
+void PutVarint64(std::string *dst, uint64_t value) {
+  char buf[10];
+  char *ptr = EncodeVarint64(buf, value);
+  dst->append(buf, ptr - buf);
+}
 
 void PutLengthPrefixedSlice(std::string* dst, const Slice& value) {
   PutVarint32(dst, value.size());
@@ -104,6 +109,34 @@ bool GetVarint32(Slice *input, uint32_t *value) {
   const char *p = input->data();
   const char *limit = p + input->size();
   const char *q = GetVarint32Ptr(p, limit, value);
+  if (q == NULL) {
+    return false;
+  } else {
+    *input = Slice(q, limit - q);
+    return true;
+  }
+}
+
+const char *GetVarint64Ptr(const char *p, const char *limit, uint64_t *v) {
+  uint64_t result = 0;
+  for (uint32_t shift = 0; shift <= 63 && p < limit; shift += 7) {
+    uint64_t byte = *(reinterpret_cast<const unsigned char*>(p));
+    ++p;
+    if (byte & 128) {
+      result |= ((byte & 127) << shift);
+    } else {
+      result |= ((byte) << shift);
+      *v = result;
+      return reinterpret_cast<const char *>(p);
+    }
+  }
+  return NULL;
+}
+
+bool GetVarint64(Slice *input, uint64_t *value) {
+  const char *p = input->data();
+  const char *limit = p + input->size();
+  const char *q = GetVarint64Ptr(p, limit, value);
   if (q == NULL) {
     return false;
   } else {

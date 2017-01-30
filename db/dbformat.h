@@ -2,6 +2,7 @@
 #define DB_DBFORMAT_H
 
 #include "leveldb/comparator.h"
+#include "leveldb/db.h"
 #include "leveldb/slice.h"
 #include "util/coding.h"
 

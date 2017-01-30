@@ -2,6 +2,7 @@
 #define LEVELDB_DB_H
 
 #include "leveldb/iterator.h"
+#include "leveldb/options.h"
 
 namespace leveldb {
 // Update Makefile if you change these
@@ -9,8 +10,6 @@ static const int kMajorVersion = 1;
 static const int kMinorVersion = 7;
 
 struct Options;
-struct ReadOptions;
-struct WriteOptions;
 class WriteBatch;
 
 class Snapshot {

@@ -24,6 +24,8 @@ public:
   virtual Status NewWritableFile(const std::string& fname,
                                  WritableFile** result) = 0;
   virtual Status DeleteFile(const std::string& fname) = 0;
+  virtual Status RenameFile(const std::string& src,
+                            const std::string& target) = 0;
 };
 
 class SequentialFile {
