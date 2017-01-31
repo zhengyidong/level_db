@@ -3,6 +3,33 @@
 #include "leveldb/slice.h"
 
 namespace leveldb {
+
+void AppendNumberTo(std::string *str, uint64_t num) {
+  char buf[30];
+  snprintf(buf, sizeof(buf), "%llu", (unsigned long long) num);
+  str->append(buf);
+}
+
+void AppendEscapedStringTo(std::string* str, const Slice& value) {
+  for (size_t i = 0; i < value.size(); i++) {
+    char c = value[i];
+    if (c >= ' ' && c <= '~') {
+      str->push_back(c);
+    } else {
+      char buf[10];
+      snprintf(buf, sizeof(buf), "\\x%02x",
+               static_cast<unsigned int>(c) & 0xff);
+      str->append(buf);
+    }
+  }
+}
+
+std::string EscapeString(const Slice& value) {
+  std::string r;
+  AppendEscapedStringTo(&r, value);
+  return r;
+}
+
 bool ConsumeDecimalNumber(Slice* in, uint64_t* val) {
   uint64_t v = 0;
   int digits = 0;

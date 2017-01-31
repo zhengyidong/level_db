@@ -21,11 +21,59 @@ public:
   static Env *Default();
   virtual Status NewSequentialFile(const std::string& fname,
                                    SequentialFile** result) = 0;
+
+  // Create a brand new random access read-only file with the
+  // specified name.  On success, stores a pointer to the new file in
+  // *result and returns OK.  On failure stores NULL in *result and
+  // returns non-OK.  If the file does not exist, returns a non-OK
+  // status.
+  //
+  // The returned file may be concurrently accessed by multiple threads.
+  virtual Status NewRandomAccessFile(const std::string& fname,
+                                     RandomAccessFile** result) = 0;
+
   virtual Status NewWritableFile(const std::string& fname,
                                  WritableFile** result) = 0;
-  virtual Status DeleteFile(const std::string& fname) = 0;
+
+  // Returns true iff the named file exists.
+  virtual bool FileExists(const std::string &fname) = 0;
+
+  // Delete the named file.
+  virtual Status DeleteFile(const std::string &fname) = 0;
+
+  // Create the specified directory.
+  virtual Status CreateDir(const std::string &dirname) = 0;
+
+  // Delete the specified directory.
+  virtual Status DeleteDir(const std::string &dirname) = 0;
+
+  // Store the size of fname in *file_size.
+  virtual Status GetFileSize(const std::string& fname, uint64_t* file_size) = 0;
+
+  // Rename file src to target.
   virtual Status RenameFile(const std::string& src,
                             const std::string& target) = 0;
+
+  // Lock the specified file.  Used to prevent concurrent access to
+  // the same db by multiple processes.  On failure, stores NULL in
+  // *lock and returns non-OK.
+  //
+  // On success, stores a pointer to the object that represents the
+  // acquired lock in *lock and returns OK.  The caller should call
+  // UnlockFile(*lock) to release the lock.  If the process exits,
+  // the lock will be automatically released.
+  //
+  // If somebody else already holds the lock, finishes immediately
+  // with a failure.  I.e., this call does not wait for existing locks
+  // to go away.
+  //
+  // May create the named file if it does not already exist.
+  virtual Status LockFile(const std::string& fname, FileLock** lock) = 0;
+
+  // Release the lock acquired by a previous successful call to LockFile.
+  // REQUIRES: lock was returned by a successful LockFile() call
+  // REQUIRES: lock has not already been unlocked.
+  virtual Status UnlockFile(FileLock* lock) = 0;
 };
 
 class SequentialFile {
@@ -86,7 +134,7 @@ class Logger {
 // Identifies a locked file.
 class FileLock {
  public:
-  FileLock() { }
+  FileLock() {}
   virtual ~FileLock();
  private:
   // No copying allowed

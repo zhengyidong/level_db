@@ -17,6 +17,10 @@ public:
   virtual Handle *Insert(const Slice &key, void *value, size_t charge,
                          void (*deleter)(const Slice &key, void *value)) = 0;
   virtual Handle *Lookup(const Slice &key) = 0;
+
+  // Release a mapping returned by a previous Lookup().
+  // REQUIRES: handle must not have been released yet.
+  // REQUIRES: handle must have been returned by a method on *this.
   virtual void Release(Handle *handle) = 0;
   virtual void *Value(Handle *handle) = 0;
   virtual void Erase(const Slice &key) = 0;

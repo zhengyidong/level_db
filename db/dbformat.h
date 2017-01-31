@@ -5,8 +5,16 @@
 #include "leveldb/db.h"
 #include "leveldb/slice.h"
 #include "util/coding.h"
+#include "util/logging.h"
 
 namespace leveldb {
+
+// Grouping of constants.  We may want to make some of these
+// parameters set via options.
+namespace config {
+static const int kNumLevels = 7;
+
+}
 
 class InternalKey;
 
@@ -27,6 +35,7 @@ struct ParsedInternalKey {
   ParsedInternalKey() {}
   ParsedInternalKey(const Slice &u, const SequenceNumber &seq, ValueType t)
     :user_key(u), sequence(seq), type(t) {}
+  std::string DebugString() const;
 };
 
 inline Slice ExtractUserKey(const Slice &internal_key) {
@@ -34,7 +43,15 @@ inline Slice ExtractUserKey(const Slice &internal_key) {
   return Slice(internal_key.data(), internal_key.size() - 8);
 }
 
+// Append the serialization of "key" to *result.
 extern void AppendInternalKey(std::string *result, const ParsedInternalKey &key);
+
+// Attempt to parse an internal key from "internal_key".  On success,
+// stores the parsed data in "*result", and returns true.
+//
+// On error, returns false, leaves "*result" in an undefined state.
+extern bool ParseInternalKey(const Slice& internal_key,
+                             ParsedInternalKey* result);
 
 class InternalKeyComparator : public Comparator {
 private:
@@ -43,7 +60,10 @@ public:
   explicit InternalKeyComparator(const Comparator *c) : user_comparator_(c) {}
   virtual const char *Name() const;
   virtual int Compare(const Slice &a, const Slice &b) const;
+
   const Comparator *user_comparator() const { return user_comparator_; }
+
+  int Compare(const InternalKey& a, const InternalKey& b) const;
 };
 
 class InternalKey {
@@ -56,7 +76,7 @@ public:
   }
 
   void DecodeFrom(const Slice &s) { rep_.assign(s.data(), s.size()); }
-  Slice encode() const {
+  Slice Encode() const {
     assert(!rep_.empty());
     return rep_;
   }
@@ -69,8 +89,23 @@ public:
   }
 
   void Clear() { rep_.clear(); }
+
+  std::string DebugString() const;
 };
 
+inline bool ParseInternalKey(const Slice& internal_key,
+                             ParsedInternalKey* result) {
+  const size_t n = internal_key.size();
+  if (n < 8) return false;
+  uint64_t num = DecodeFixed64(internal_key.data() + n - 8);
+  unsigned char c = num & 0xff;
+  result->sequence = num >> 8;
+  result->type = static_cast<ValueType>(c);
+  result->user_key = Slice(internal_key.data(), n - 8);
+  return (c <= static_cast<unsigned char>(kTypeValue));
+}
+
+// A helper class useful for DBImpl::Get()
 class LookupKey {
 public:
   LookupKey(const Slice &user_key, SequenceNumber sequence);
@@ -95,4 +130,3 @@ inline LookupKey::~LookupKey() {
 }
 
 #endif // DB_DBFORMAT_H
-

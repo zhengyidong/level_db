@@ -1,7 +1,10 @@
 #include "db/db_impl.h"
 
+#include "db/filename.h"
 #include "db/dbformat.h"
+#include "db/version_set.h"
 #include "db/write_batch_internal.h"
+#include "leveldb/env.h"
 #include "util/mutexlock.h"
 
 namespace leveldb {
@@ -15,6 +18,36 @@ struct DBImpl::Writer {
 
   explicit Writer(port::Mutex *mu) : cv(mu) {}
 };
+
+Status DBImpl::Recover(VersionEdit *edit) {
+  mutex_.AssertHeld();
+
+  env_->CreateDir(dbname_);
+  assert(db_lock_ == NULL);
+  Status s = env_->LockFile(LockFileName(dbname_), &db_lock_);
+  if (!s.ok()) {
+    return s;
+  }
+
+  if (!env_->FileExists(CurrentFileName(dbname_))) {
+    if (options_.create_if_missing) {
+      // TODO
+//      s = NewDB();
+      if (!s.ok()) {
+        return s;
+      }
+    } else {
+      return Status::InvalidArgument(
+            dbname_, "does not exist (create_if_missing is false)");
+    }
+  } else {
+    if (options_.error_if_exists) {
+      return Status::InvalidArgument(
+            dbname_, "exists (error_if_exists is true)");
+    }
+  }
+  // TODO
+}
 
 Status DBImpl::Put(const WriteOptions &o, const Slice &key, const Slice &val) {
   return DB::Put(o, key, val);
@@ -68,6 +101,17 @@ Status DB::Delete(const WriteOptions& opt, const Slice& key) {
   return Write(opt, &batch);
 }
 
-DB::~DB() { }
+DB::~DB() {}
+
+Status DB::Open(const Options &options, const std::string &name, DB **dbptr) {
+  // TODO
+  /*
+  *dbptr = NULL;
+
+  DBImpl *impl = new DBImpl(options, name);
+  impl->mutex_.Lock();
+  VersionEdit edit;
+  */
+}
 
 }

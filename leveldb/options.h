@@ -44,6 +44,12 @@ struct Options {
   int block_restart_interval;
 
   CompressionType compression;
+
+  // If non-NULL, use the specified filter policy to reduce disk reads.
+  // Many applications will benefit from passing the result of
+  // NewBloomFilterPolicy() here.
+  //
+  // Default: NULL
   const FilterPolicy *filter_policy;
   Options();
 
@@ -54,6 +60,10 @@ struct ReadOptions {
   // verified against corresponding checksums.
   // Default: false
   bool verify_checksums;
+
+  // Should the data read for this iteration be cached in memory?
+  // Callers may wish to set this field to false for bulk scans.
+  // Default: true
   bool fill_cache;
   const Snapshot *snapshot;
 
