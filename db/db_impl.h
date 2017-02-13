@@ -2,12 +2,18 @@
 #define DB_DB_IMPL_H
 
 #include <deque>
+#include <set>
+#include "db/dbformat.h"
+#include "db/log_writer.h"
 #include "leveldb/db.h"
 #include "port/port.h"
 
 namespace leveldb {
 
+class MemTable;
+class TableCache;
 class FileLock;
+class Version;
 class VersionEdit;
 class VersionSet;
 
@@ -21,27 +27,98 @@ public:
 private:
   struct Writer;
 
+  Status NewDB();
+
   // Recover the descriptor from persistent storage.  May do a significant
   // amount of work to recover recently logged updates.  Any changes to
   // be made to the descriptor are added to *edit.
   Status Recover(VersionEdit *edit);
 
-  Status MakeRoomForWrite(bool force);
+  // Delete any unneeded files and stale in-memory entries.
+  void DeleteObsoleteFiles();
+
+  // Compact the in-memory write buffer to disk.  Switches to a new
+  // log-file/memtable and writes a new descriptor iff successful.
+  Status CompactMemTable();
+
+  Status WriteLevel0Table(MemTable *mem, VersionEdit *edit, Version *base);
+
+  Status MakeRoomForWrite(bool force /* compact even if there is room? */);
+
+  void MaybeScheduleCompaction();
+  static void BGWork(void *db);
+  void BackgroundCall();
+  Status BackgroundCompaction();
 
   // Constant after construction
   Env *env_;
+  const InternalKeyComparator internal_comparator_;
   const Options options_;
   const std::string dbname_;
+
+  // table_cache_ provides its own synchronization
+  TableCache* table_cache_;
 
   // Lock over the persistent DB state.  Non-NULL iff successfully acquired.
   FileLock *db_lock_;
 
   port::Mutex mutex_;
+  port::AtomicPointer shutting_down_;
+  port::CondVar bg_cv_;          // Signalled when background work finishes
+  MemTable *mem_;
+  MemTable* imm_;                // Memtable being compacted
+  port::AtomicPointer has_imm_;  // So bg thread can detect non-NULL imm_
+  WritableFile *logfile_;
+  uint64_t logfile_number_;
+  log::Writer *log_;
+
+
   std::deque<Writer*> writers_;
+
+  // Set of table files to protect from deletion because they are
+  // part of ongoing compactions.
+  std::set<uint64_t> pending_outputs_;
+
+  bool bg_compaction_scheduled_;
+
+  // Information for a manual compaction
+  struct ManualCompaction {
+    int level;
+    bool done;
+    const InternalKey* begin;   // NULL means beginning of key range
+    const InternalKey* end;     // NULL means end of key range
+    InternalKey tmp_storage;    // Used to keep track of compaction progress
+  };
+  ManualCompaction *manual_compaction_;
 
   VersionSet *versions_;
 
   Status bg_error_;
+
+  // Per level compaction stats.  stats_[level] stores the stats for
+  // compactions that produced data for the specified "level".
+  struct CompactionStats {
+    int64_t micros;
+    int64_t bytes_read;
+    int64_t bytes_written;
+
+    CompactionStats() : micros(0), bytes_read(0), bytes_written(0) {}
+
+    void Add(const CompactionStats& c) {
+      this->micros += c.micros;
+      this->bytes_read += c.bytes_read;
+      this->bytes_written += c.bytes_written;
+    }
+  };
+  CompactionStats stats_[config::kNumLevels];
+
+  // No copying allowed
+  DBImpl(const DBImpl&);
+  void operator=(const DBImpl&);
+
+  const Comparator* user_comparator() const {
+    return internal_comparator_.user_comparator();
+  }
 };
 }
 

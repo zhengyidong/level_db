@@ -1,11 +1,15 @@
+#include <deque>
 #include <set>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include "leveldb/env.h"
 #include "leveldb/status.h"
 #include "port/port.h"
@@ -265,6 +269,21 @@ public:
     return access(fname.c_str(), F_OK) == 0;
   }
 
+  virtual Status GetChildren(const std::string& dir,
+                             std::vector<std::string>* result) {
+    result->clear();
+    DIR* d = opendir(dir.c_str());
+    if (d == NULL) {
+      return IOError(dir, errno);
+    }
+    struct dirent* entry;
+    while ((entry = readdir(d)) != NULL) {
+      result->push_back(entry->d_name);
+    }
+    closedir(d);
+    return Status::OK();
+  }
+
   virtual Status DeleteFile(const std::string &fname) {
     Status result;
     if (unlink(fname.c_str()) != 0) {
@@ -343,10 +362,88 @@ public:
     return result;
   }
 
+  virtual void Schedule(void (*function)(void*), void* arg);
+
+  virtual uint64_t NowMicros() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return static_cast<uint64_t>(tv.tv_sec) * 1000000 + tv.tv_usec;
+  }
+
+  virtual void SleepForMicroseconds(int micros) {
+    usleep(micros);
+  }
+
 private:
+  void PthreadCall(const char* label, int result) {
+    if (result != 0) {
+      fprintf(stderr, "pthread %s: %s\n", label, strerror(result));
+      exit(1);
+    }
+  }
+
+  // BGThread() is the body of the background thread
+  void BGThread();
+  static void* BGThreadWrapper(void* arg) {
+    reinterpret_cast<PosixEnv*>(arg)->BGThread();
+    return NULL;
+  }
+
+  pthread_mutex_t mu_;
+  pthread_cond_t bgsignal_;
+  pthread_t bgthread_;
+  bool started_bgthread_;
+
+  // Entry per Schedule() call
+  struct BGItem { void* arg; void (*function)(void*); };
+  typedef std::deque<BGItem> BGQueue;
+  BGQueue queue_;
+
   PosixLockTable locks_;
   MmapLimiter mmap_limit_;
 };
+
+void PosixEnv::Schedule(void (*function)(void *), void *arg) {
+  PthreadCall("lock", pthread_mutex_lock(&mu_));
+
+  // Start background thread if necessary
+  if (!started_bgthread_) {
+    started_bgthread_ = true;
+    PthreadCall(
+          "create thread",
+          pthread_create(&bgthread_, NULL, &PosixEnv::BGThreadWrapper, this));
+  }
+
+  // If the queue is currently empty, the background thread may currently be
+  // waiting.
+  if (queue_.empty()) {
+    PthreadCall("signal", pthread_cond_signal(&bgsignal_));
+  }
+
+  // Add to priority queue
+  queue_.push_back(BGItem());
+  queue_.back().function = function;
+  queue_.back().arg = arg;
+
+  PthreadCall("unlock", pthread_mutex_unlock(&mu_));
+}
+
+void PosixEnv::BGThread() {
+  while (true) {
+    // Wait until there is an item that is ready to run
+    PthreadCall("lock", pthread_mutex_lock(&mu_));
+    while (queue_.empty()) {
+      PthreadCall("wait", pthread_cond_wait(&bgsignal_, &mu_));
+    }
+
+    void (*function)(void*) = queue_.front().function;
+    void *arg = queue_.front().arg;
+    queue_.pop_front();
+
+    PthreadCall("unlock", pthread_mutex_unlock(&mu_));
+    (*function)(arg);
+  }
+}
 }
 
 static pthread_once_t once = PTHREAD_ONCE_INIT;

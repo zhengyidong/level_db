@@ -4,6 +4,7 @@
 #include "leveldb/comparator.h"
 #include "leveldb/db.h"
 #include "leveldb/slice.h"
+#include "leveldb/table_builder.h"
 #include "util/coding.h"
 #include "util/logging.h"
 
@@ -14,6 +15,22 @@ namespace leveldb {
 namespace config {
 static const int kNumLevels = 7;
 
+// Level-0 compaction is started when we hit this many files.
+static const int kL0_CompactionTrigger = 4;
+
+// Soft limit on number of level-0 files.  We slow down writes at this point.
+static const int kL0_SlowdownWritesTrigger = 8;
+
+// Maximum number of level-0 files.  We stop writes at this point.
+static const int kL0_StopWritesTrigger = 12;
+
+// Maximum level to which a new compacted memtable is pushed if it
+// does not create overlap.  We try to push to level 2 to avoid the
+// relatively expensive level 0=>1 compactions and to avoid some
+// expensive manifest file operations.  We do not push all the way to
+// the largest level since that can generate a lot of wasted disk
+// space if the same key space is being repeatedly overwritten.
+static const int kMaxMemCompactLevel = 2;
 }
 
 class InternalKey;
@@ -53,6 +70,8 @@ extern void AppendInternalKey(std::string *result, const ParsedInternalKey &key)
 extern bool ParseInternalKey(const Slice& internal_key,
                              ParsedInternalKey* result);
 
+// A comparator for internal keys that uses a specified comparator for
+// the user key portion and breaks ties by decreasing sequence number.
 class InternalKeyComparator : public Comparator {
 private:
   const Comparator *user_comparator_;
@@ -60,6 +79,10 @@ public:
   explicit InternalKeyComparator(const Comparator *c) : user_comparator_(c) {}
   virtual const char *Name() const;
   virtual int Compare(const Slice &a, const Slice &b) const;
+  virtual void FindShortestSeparator(
+      std::string* start,
+      const Slice& limit) const;
+  virtual void FindShortSuccessor(std::string* key) const;
 
   const Comparator *user_comparator() const { return user_comparator_; }
 
@@ -92,6 +115,11 @@ public:
 
   std::string DebugString() const;
 };
+
+inline int InternalKeyComparator::Compare(
+    const InternalKey& a, const InternalKey& b) const {
+  return Compare(a.Encode(), b.Encode());
+}
 
 inline bool ParseInternalKey(const Slice& internal_key,
                              ParsedInternalKey* result) {

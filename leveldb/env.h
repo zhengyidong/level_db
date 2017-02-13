@@ -2,6 +2,7 @@
 #define LEVELDB_ENV_H
 
 #include <cstdarg>
+#include <vector>
 #include <stdint.h>
 #include "leveldb/status.h"
 
@@ -37,6 +38,12 @@ public:
 
   // Returns true iff the named file exists.
   virtual bool FileExists(const std::string &fname) = 0;
+
+  // Store in *result the names of the children of the specified directory.
+  // The names are relative to "dir".
+  // Original contents of *results are dropped.
+  virtual Status GetChildren(const std::string& dir,
+                             std::vector<std::string>* result) = 0;
 
   // Delete the named file.
   virtual Status DeleteFile(const std::string &fname) = 0;
@@ -74,6 +81,28 @@ public:
   // REQUIRES: lock was returned by a successful LockFile() call
   // REQUIRES: lock has not already been unlocked.
   virtual Status UnlockFile(FileLock* lock) = 0;
+
+  // Arrange to run "(*function)(arg)" once in a background thread.
+  //
+  // "function" may run in an unspecified thread.  Multiple functions
+  // added to the same Env may run concurrently in different threads.
+  // I.e., the caller may not assume that background work items are
+  // serialized.
+  virtual void Schedule(
+      void (*function)(void* arg),
+      void* arg) = 0;
+
+  // Returns the number of micro-seconds since some fixed point in time. Only
+  // useful for computing deltas of time.
+  virtual uint64_t NowMicros() = 0;
+
+  // Sleep/delay the thread for the perscribed number of micro-seconds.
+  virtual void SleepForMicroseconds(int micros) = 0;
+
+ private:
+  // No copying allowed
+  Env(const Env&);
+  void operator=(const Env&);
 };
 
 class SequentialFile {
