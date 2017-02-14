@@ -48,7 +48,7 @@ Status WriteStringToFileSync(Env *env, const Slice &data,
   return DoWriteStringToFile(env, data, fname, true);
 }
 
-Status ReadFileTOString(Env *env, const std::string &fname, std::string *data) {
+Status ReadFileToString(Env *env, const std::string &fname, std::string *data) {
   data->clear();
   SequentialFile *file;
   Status s = env->NewSequentialFile(fname, &file);

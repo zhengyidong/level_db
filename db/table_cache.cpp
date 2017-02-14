@@ -1,3 +1,7 @@
+// Copyright (c) 2011 The LevelDB Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file. See the AUTHORS file for names of contributors.
+
 #include "db/table_cache.h"
 
 #include "db/filename.h"
@@ -56,6 +60,8 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
     if (!s.ok()) {
       assert(table == NULL);
       delete file;
+      // We do not cache error results so that if the error is transient,
+      // or somebody repairs the file, we recover automatically.
     } else {
       TableAndFile *tf = new TableAndFile;
       tf->file = file;
@@ -79,7 +85,7 @@ Iterator *TableCache::NewIterator(const ReadOptions &options,
     return NewErrorIterator(s);
   }
 
-  Table* table = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
+  Table *table = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
   Iterator* result = table->NewIterator(options);
   result->RegisterCleanup(&UnrefEntry, cache_, handle);
   if (tableptr != NULL) {

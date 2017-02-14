@@ -66,7 +66,11 @@ public:
   // result that covers the range [smallest_user_key,largest_user_key].
   int PickLevelForMemTableOutput(const Slice& smallest_user_key,
                                  const Slice& largest_user_key);
+
+  // Return a human readable string that describes this version's contents.
+  std::string DebugString() const;
 private:
+  friend class Compaction;
   friend class VersionSet;
 
   class LevelFileNumIterator;
@@ -153,6 +157,9 @@ public:
     last_sequence_ = s;
   }
 
+  // Mark the specified file number as used.
+  void MarkFileNumberUsed(uint64_t number);
+
   // Return the current log file number.
   uint64_t LogNumber() const { return log_number_; }
 
@@ -175,6 +182,10 @@ public:
       const InternalKey *begin,
       const InternalKey *end);
 
+  // Create an iterator that reads over the compaction inputs for "*c".
+  // The caller should delete the iterator when no longer needed.
+  Iterator *MakeInputIterator(Compaction *c);
+
   // Returns true iff some level needs a compaction.
   bool NeedsCompaction() const {
     Version *v = current_;
@@ -184,6 +195,13 @@ public:
   // Add all files listed in any live version to *live.
   // May also mutate some internal state.
   void AddLiveFiles(std::set<uint64_t>* live);
+
+  // Return a human-readable short (single-line) summary of the number
+  // of files per level.  Uses *scratch as backing store.
+  struct LevelSummaryStorage {
+    char buffer[100];
+  };
+  const char *LevelSummary(LevelSummaryStorage *scratch) const;
 
 private:
   class Builder;
@@ -237,15 +255,44 @@ public:
   // and "level+1" will be merged to produce a set of "level+1" files.
   int level() const { return level_; }
 
+  // Return the object that holds the edits to the descriptor done
+  // by this compaction.
+  VersionEdit *edit() { return &edit_; }
+
   // "which" must be either 0 or 1
   int num_input_files(int which) const { return inputs_[which].size(); }
 
   // Return the ith input file at "level()+which" ("which" must be 0 or 1).
   FileMetaData* input(int which, int i) const { return inputs_[which][i]; }
+
+  // Maximum size of files to build during this compaction.
+  uint64_t MaxOutputFileSize() const { return max_output_file_size_; }
+
+  // Is this a trivial compaction that can be implemented by just
+  // moving a single input file to the next level (no merging or splitting)
+  bool IsTrivialMove() const;
+
+  // Add all inputs to this compaction as delete operations to *edit.
+  void AddInputDeletions(VersionEdit *edit);
+
+  // Returns true if the information we have available guarantees that
+  // the compaction is producing data in "level+1" for which no data exists
+  // in levels greater than "level+1".
+  bool IsBaseLevelForKey(const Slice &user_key);
+
+  // Returns true iff we should stop building the current output
+  // before processing "internal_key".
+  bool ShouldStopBefore(const Slice &internal_key);
+
+  // Release the input version for the compaction, once the compaction
+  // is successful.
+  void ReleaseInputs();
+
 private:
   explicit Compaction(int level);
 
   int level_;
+  uint64_t max_output_file_size_;
   Version *input_version_;
   VersionEdit edit_;
 
@@ -255,6 +302,18 @@ private:
   // State used to check for number of of overlapping grandparent files
   // (parent == level_ + 1, grandparent == level_ + 2)
   std::vector<FileMetaData*> grandparents_;
+  size_t grandparent_index_;  // Index in grandparent_starts_
+  bool seen_key_;             // Some output key has been seen
+  int64_t overlapped_bytes_;  // Bytes of overlap between current output
+                              // and grandparent files
+
+  // State for implementing IsBaseLevelForKey
+
+  // level_ptrs_ holds indices into input_version_->levels_: our state
+  // is that we are positioned at one of the file ranges for each
+  // higher level than the ones involved in this compaction (i.e. for
+  // all L >= level_ + 2).
+  size_t level_ptrs_[config::kNumLevels];
 };
 }
 

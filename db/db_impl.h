@@ -34,6 +34,7 @@ public:
   virtual const Snapshot *GetSnapshot();
   virtual void ReleaseSnapshot(const Snapshot* snapshot);
 private:
+  struct CompactionState;
   struct Writer;
 
   Iterator* NewInternalIterator(const ReadOptions&,
@@ -62,6 +63,13 @@ private:
   static void BGWork(void *db);
   void BackgroundCall();
   Status BackgroundCompaction();
+  void CleanupCompaction(CompactionState* compact);
+  Status DoCompactionWork(CompactionState *compact);
+  Status InstallCompactionResults(CompactionState* compact);
+
+  Status OpenCompactionOutputFile(CompactionState *compact);
+
+  Status FinishCompactionOutputFile(CompactionState *compact, Iterator *input);
 
   // Constant after construction
   Env *env_;

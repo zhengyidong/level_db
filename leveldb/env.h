@@ -181,7 +181,10 @@ extern void Log(Logger *info_log, const char *format, ...)
 ;
 
 extern Status WriteStringToFile(Env *v, const Slice &data, const std::string &fname);
-extern Status ReadFileTOString(Env *v, const std::string &fname, std::string *data);
+
+// A utility routine: read contents of named file into *data
+extern Status ReadFileToString(Env *v, const std::string &fname,
+                               std::string *data);
 
 
 }
