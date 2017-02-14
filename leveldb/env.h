@@ -92,6 +92,9 @@ public:
       void (*function)(void* arg),
       void* arg) = 0;
 
+  // Create and return a log file for storing informational messages.
+  virtual Status NewLogger(const std::string& fname, Logger** result) = 0;
+
   // Returns the number of micro-seconds since some fixed point in time. Only
   // useful for computing deltas of time.
   virtual uint64_t NowMicros() = 0;

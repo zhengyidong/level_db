@@ -5,6 +5,7 @@
 #include <set>
 #include "db/dbformat.h"
 #include "db/log_writer.h"
+#include "db/snapshot.h"
 #include "leveldb/db.h"
 #include "port/port.h"
 
@@ -21,11 +22,22 @@ class DBImpl : public DB {
 public:
   DBImpl(const Options& options, const std::string& dbname);
   virtual ~DBImpl();
+
+  // Implementations of the DB interface
   virtual Status Put(const WriteOptions&, const Slice& key, const Slice& value);
   virtual Status Delete(const WriteOptions&, const Slice& key);
   virtual Status Write(const WriteOptions& options, WriteBatch* updates);
+  virtual Status Get(const ReadOptions& options,
+                     const Slice& key,
+                     std::string* value);
+  virtual Iterator* NewIterator(const ReadOptions&);
+  virtual const Snapshot *GetSnapshot();
+  virtual void ReleaseSnapshot(const Snapshot* snapshot);
 private:
   struct Writer;
+
+  Iterator* NewInternalIterator(const ReadOptions&,
+                                SequenceNumber* latest_snapshot);
 
   Status NewDB();
 
@@ -44,6 +56,7 @@ private:
   Status WriteLevel0Table(MemTable *mem, VersionEdit *edit, Version *base);
 
   Status MakeRoomForWrite(bool force /* compact even if there is room? */);
+  WriteBatch* BuildBatchGroup(Writer** last_writer);
 
   void MaybeScheduleCompaction();
   static void BGWork(void *db);
@@ -53,7 +66,10 @@ private:
   // Constant after construction
   Env *env_;
   const InternalKeyComparator internal_comparator_;
-  const Options options_;
+  const InternalFilterPolicy internal_filter_policy_;
+  const Options options_;  // options_.comparator == &internal_comparator_
+  bool owns_info_log_;
+  bool owns_cache_;
   const std::string dbname_;
 
   // table_cache_ provides its own synchronization
@@ -73,7 +89,11 @@ private:
   log::Writer *log_;
 
 
+  // Queue of writers.
   std::deque<Writer*> writers_;
+  WriteBatch *tmp_batch_;
+
+  SnapshotList snapshots_;
 
   // Set of table files to protect from deletion because they are
   // part of ongoing compactions.

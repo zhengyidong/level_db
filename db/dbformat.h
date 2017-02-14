@@ -89,6 +89,20 @@ public:
   int Compare(const InternalKey& a, const InternalKey& b) const;
 };
 
+// Filter policy wrapper that converts from internal keys to user keys
+class InternalFilterPolicy : public FilterPolicy {
+ private:
+  const FilterPolicy* const user_policy_;
+ public:
+  explicit InternalFilterPolicy(const FilterPolicy* p) : user_policy_(p) { }
+  virtual const char* Name() const;
+  virtual void CreateFilter(const Slice* keys, int n, std::string* dst) const;
+  virtual bool KeyMayMatch(const Slice& key, const Slice& filter) const;
+};
+
+// Modules in this directory should keep internal keys wrapped inside
+// the following class instead of plain strings so that we do not
+// incorrectly use string comparisons instead of an InternalKeyComparator.
 class InternalKey {
 private:
   std::string rep_;

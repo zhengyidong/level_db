@@ -12,7 +12,12 @@ public:
   virtual bool Valid() const = 0;
   virtual void SeekToFirst() = 0;
   virtual void SeekToLast() = 0;
+
+  // Position at the first key in the source that at or past target
+  // The iterator is Valid() after this call iff the source contains
+  // an entry that comes at or past target.
   virtual void Seek(const Slice &target) = 0;
+
   virtual void Next() = 0;
   virtual void Prev() = 0;
   virtual Slice key() const = 0;

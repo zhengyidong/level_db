@@ -14,6 +14,7 @@
 #include "leveldb/status.h"
 #include "port/port.h"
 #include "util/mutexlock.h"
+#include "util/posix_logger.h"
 
 namespace leveldb {
 namespace {
@@ -363,6 +364,24 @@ public:
   }
 
   virtual void Schedule(void (*function)(void*), void* arg);
+
+  static uint64_t gettid() {
+    pthread_t tid = pthread_self();
+    uint64_t thread_id = 0;
+    memcpy(&thread_id, &tid, std::min(sizeof(thread_id), sizeof(tid)));
+    return thread_id;
+  }
+
+  virtual Status NewLogger(const std::string& fname, Logger** result) {
+    FILE* f = fopen(fname.c_str(), "w");
+    if (f == NULL) {
+      *result = NULL;
+      return IOError(fname, errno);
+    } else {
+      *result = new PosixLogger(f, &PosixEnv::gettid);
+      return Status::OK();
+    }
+  }
 
   virtual uint64_t NowMicros() {
     struct timeval tv;

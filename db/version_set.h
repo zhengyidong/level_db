@@ -23,6 +23,11 @@ extern int FindFile(const InternalKeyComparator& icmp,
 
 class Version {
 public:
+  // Append to *iters a sequence of iterators that will
+  // yield the contents of this Version when merged together.
+  // REQUIRES: This version has been saved (see VersionSet::SaveTo)
+  void AddIterators(const ReadOptions&, std::vector<Iterator*>* iters);
+
   // Lookup the value for key.  If found, store it in *val and
   // return OK.  Else return a non-OK status.  Fills *stats.
   // REQUIRES: lock is not held
@@ -63,6 +68,9 @@ public:
                                  const Slice& largest_user_key);
 private:
   friend class VersionSet;
+
+  class LevelFileNumIterator;
+  Iterator* NewConcatenatingIterator(const ReadOptions&, int level) const;
 
   VersionSet *vset_;            // VersionSet to which this Version belongs
   Version *next_;               // Next version in linked list
@@ -136,12 +144,36 @@ public:
   // Return the number of Table files at the specified level.
   int NumLevelFiles(int level) const;
 
+  // Return the last sequence number.
+  uint64_t LastSequence() const { return last_sequence_; }
+
+  // Set the last sequence number to s.
+  void SetLastSequence(uint64_t s) {
+    assert(s >= last_sequence_);
+    last_sequence_ = s;
+  }
+
   // Return the current log file number.
   uint64_t LogNumber() const { return log_number_; }
+
+  // Pick level and inputs for a new compaction.
+  // Returns NULL if there is no compaction to be done.
+  // Otherwise returns a pointer to a heap-allocated object that
+  // describes the compaction.  Caller should delete the result.
+  Compaction* PickCompaction();
 
   // Return the log file number for the log file that is currently
   // being compacted, or zero if there is no such log file.
   uint64_t PrevLogNumber() const { return prev_log_number_; }
+
+  // Return a compaction object for compacting the range [begin,end] in
+  // the specified level.  Returns NULL if there is nothing in that
+  // level that overlaps the specified range.  Caller should delete
+  // the result.
+  Compaction *CompactRange(
+      int level,
+      const InternalKey *begin,
+      const InternalKey *end);
 
   // Returns true iff some level needs a compaction.
   bool NeedsCompaction() const {
@@ -159,6 +191,17 @@ private:
   friend class Version;
 
   void Finalize(Version *v);
+
+  void GetRange(const std::vector<FileMetaData*>& inputs,
+                InternalKey* smallest,
+                InternalKey* largest);
+
+  void GetRange2(const std::vector<FileMetaData*>& inputs1,
+                 const std::vector<FileMetaData*>& inputs2,
+                 InternalKey* smallest,
+                 InternalKey* largest);
+
+  void SetupOtherInputs(Compaction *c);
 
   // Save current contents to *log
   Status WriteSnapshot(log::Writer *log);
@@ -185,6 +228,33 @@ private:
   // Per-level key at which the next compaction at that level should start.
   // Either an empty string, or a valid InternalKey.
   std::string compact_pointer_[config::kNumLevels];
+};
+
+// A Compaction encapsulates information about a compaction.
+class Compaction {
+public:
+  // Return the level that is being compacted.  Inputs from "level"
+  // and "level+1" will be merged to produce a set of "level+1" files.
+  int level() const { return level_; }
+
+  // "which" must be either 0 or 1
+  int num_input_files(int which) const { return inputs_[which].size(); }
+
+  // Return the ith input file at "level()+which" ("which" must be 0 or 1).
+  FileMetaData* input(int which, int i) const { return inputs_[which][i]; }
+private:
+  explicit Compaction(int level);
+
+  int level_;
+  Version *input_version_;
+  VersionEdit edit_;
+
+  // Each compaction reads inputs from "level_" and "level_+1"
+  std::vector<FileMetaData*> inputs_[2]; // The two sets of inputs
+
+  // State used to check for number of of overlapping grandparent files
+  // (parent == level_ + 1, grandparent == level_ + 2)
+  std::vector<FileMetaData*> grandparents_;
 };
 }
 
