@@ -10,6 +10,7 @@ namespace leveldb {
 
 namespace log { class Writer; }
 
+class Compaction;
 class TableCache;
 class VersionSet;
 class WritableFile;
@@ -167,7 +168,7 @@ public:
   // Returns NULL if there is no compaction to be done.
   // Otherwise returns a pointer to a heap-allocated object that
   // describes the compaction.  Caller should delete the result.
-  Compaction* PickCompaction();
+  Compaction *PickCompaction();
 
   // Return the log file number for the log file that is currently
   // being compacted, or zero if there is no such log file.
@@ -206,6 +207,7 @@ public:
 private:
   class Builder;
 
+  friend class Compaction;
   friend class Version;
 
   void Finalize(Version *v);
@@ -289,6 +291,8 @@ public:
   void ReleaseInputs();
 
 private:
+  friend class VersionSet;
+
   explicit Compaction(int level);
 
   int level_;

@@ -1,3 +1,7 @@
+// Copyright (c) 2011 The LevelDB Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file. See the AUTHORS file for names of contributors.
+
 #include "db/dbformat.h"
 #include "util/coding.h"
 
@@ -36,43 +40,26 @@ std::string InternalKey::DebugString() const {
   return result;
 }
 
-const char* InternalFilterPolicy::Name() const {
-  return user_policy_->Name();
+const char *InternalKeyComparator::Name() const {
+  return "leveldb.InternalKeyComparator";
 }
 
-void InternalFilterPolicy::CreateFilter(const Slice* keys, int n,
-                                        std::string* dst) const {
-  // We rely on the fact that the code in table.cc does not mind us
-  // adjusting keys[].
-  Slice* mkey = const_cast<Slice*>(keys);
-  for (int i = 0; i < n; i++) {
-    mkey[i] = ExtractUserKey(keys[i]);
-    // TODO(sanjay): Suppress dups?
+int InternalKeyComparator::Compare(const Slice &a, const Slice &b) const {
+  // Order by:
+  //    increasing user key (according to user-supplied comparator)
+  //    decreasing sequence number
+  //    decreasing type (though sequence# should be enough to disambiguate)
+  int r = user_comparator_->Compare(ExtractUserKey(a), ExtractUserKey(b));
+  if (r == 0) {
+    const uint64_t anum = DecodeFixed64(a.size() + a.data() - 8);
+    const uint64_t bnum = DecodeFixed64(b.size() + b.data() - 8);
+    if (anum > bnum) {
+      r = -1;
+    } else if (anum < bnum) {
+      r = +1;
+    }
   }
-  user_policy_->CreateFilter(keys, n, dst);
-}
-
-bool InternalFilterPolicy::KeyMayMatch(const Slice& key, const Slice& f) const {
-  return user_policy_->KeyMayMatch(ExtractUserKey(key), f);
-}
-
-LookupKey::LookupKey(const Slice &user_key, SequenceNumber s) {
-  size_t usize = user_key.size();
-  size_t needed = usize + 13;
-  char *dst;
-  if (needed <= sizeof(space_)) {
-    dst = space_;
-  } else {
-    dst = new char[needed];
-  }
-  start_ = dst;
-  dst = EncodeVarint32(dst, usize + 8);
-  kstart_ = dst;
-  memcpy(dst, user_key.data(), usize);
-  dst += usize;
-  EncodeFixed64(dst, PackSequenceAndType(s, kValueTypeForSeek));
-  dst += 8;
-  end_ = dst;
+  return r;
 }
 
 void InternalKeyComparator::FindShortestSeparator(
@@ -108,22 +95,43 @@ void InternalKeyComparator::FindShortSuccessor(std::string* key) const {
   }
 }
 
-const char *InternalKeyComparator::Name() const {
-  return "leveldb.InternalKeyComparator";
+const char* InternalFilterPolicy::Name() const {
+  return user_policy_->Name();
 }
 
-int InternalKeyComparator::Compare(const Slice &a, const Slice &b) const {
-  int r = user_comparator_->Compare(ExtractUserKey(a), ExtractUserKey(b));
-  if (r == 0) {
-    const uint64_t anum = DecodeFixed64(a.size() + a.data() - 8);
-    const uint64_t bnum = DecodeFixed64(b.size() + b.data() - 8);
-    if (anum > bnum) {
-      r = -1;
-    } else if (anum < bnum) {
-      r = +1;
-    }
+void InternalFilterPolicy::CreateFilter(const Slice *keys, int n,
+                                        std::string *dst) const {
+  // We rely on the fact that the code in table.cc does not mind us
+  // adjusting keys[].
+  Slice* mkey = const_cast<Slice*>(keys);
+  for (int i = 0; i < n; i++) {
+    mkey[i] = ExtractUserKey(keys[i]);
+    // TODO(sanjay): Suppress dups?
   }
-  return r;
+  user_policy_->CreateFilter(keys, n, dst);
 }
 
+bool InternalFilterPolicy::KeyMayMatch(const Slice& key, const Slice& f) const {
+  return user_policy_->KeyMayMatch(ExtractUserKey(key), f);
 }
+
+LookupKey::LookupKey(const Slice &user_key, SequenceNumber s) {
+  size_t usize = user_key.size();
+  size_t needed = usize + 13;
+  char *dst;
+  if (needed <= sizeof(space_)) {
+    dst = space_;
+  } else {
+    dst = new char[needed];
+  }
+  start_ = dst;
+  dst = EncodeVarint32(dst, usize + 8);
+  kstart_ = dst;
+  memcpy(dst, user_key.data(), usize);
+  dst += usize;
+  EncodeFixed64(dst, PackSequenceAndType(s, kValueTypeForSeek));
+  dst += 8;
+  end_ = dst;
+}
+
+} // end of namespace leveldb

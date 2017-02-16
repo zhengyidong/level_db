@@ -165,7 +165,7 @@ void MergingIterator::FindSmallest() {
 
 void MergingIterator::FindLargest() {
   IteratorWrapper *largest = NULL;
-  for (int i = n - 1; i >= 0; --i) {
+  for (int i = n_ - 1; i >= 0; --i) {
     IteratorWrapper *child = &children_[i];
     if (child->Valid()) {
       if (largest == NULL) {

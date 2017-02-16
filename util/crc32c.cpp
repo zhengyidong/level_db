@@ -1,5 +1,13 @@
+// Copyright (c) 2011 The LevelDB Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file. See the AUTHORS file for names of contributors.
+//
+// A portable implementation of crc32c, optimized to handle
+// four bytes at a time.
+
 #include "util/crc32c.h"
 
+#include <stdint.h>
 #include "util/coding.h"
 
 namespace leveldb {
@@ -269,6 +277,7 @@ static const uint32_t table3_[256] = {
   0x31035088, 0xec46fa30, 0x8e647309, 0x5321d9b1,
   0x4a21617b, 0x9764cbc3, 0xf54642fa, 0x2803e842
 };
+
 // Used to fetch a naturally-aligned 32-bit word in little endian byte-order
 static inline uint32_t LE_LOAD32(const uint8_t *p) {
   return DecodeFixed32(reinterpret_cast<const char*>(p));
@@ -292,9 +301,12 @@ uint32_t Extend(uint32_t crc, const char *buf, size_t size) {
       table0_[(c >> 24)];                 \
 } while (0)
 
+  // Point x at first 4-byte aligned byte in string.  This might be
+  // just past the end of the string.
   const uintptr_t pval = reinterpret_cast<uintptr_t>(p);
-  const uint8_t *x = reinterpret_cast<uint8_t*>(((pval+3) >> 2) << 2);
+  const uint8_t *x = reinterpret_cast<const uint8_t*>(((pval + 3) >> 2) << 2);
   if (x <= e) {
+    // Process bytes until finished or p is 4-byte aligned
     while (p != x) {
       STEP1;
     }

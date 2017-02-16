@@ -13,7 +13,9 @@ public:
   WriteBatch();
   ~WriteBatch();
 
+  // Store the mapping "key->value" in the database.
   void Put(const Slice &key, const Slice &value);
+
   void Delete(const Slice &key);
   void Clear();
 
@@ -26,7 +28,8 @@ public:
   Status Iterate(Handler *handler) const;
 private:
   friend class WriteBatchInternal;
-  std::string rep_;
+
+  std::string rep_;  // See comment in write_batch.cc for the format of rep_
 };
 }
 

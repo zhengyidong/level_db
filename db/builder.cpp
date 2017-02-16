@@ -58,6 +58,7 @@ Status BuildTable(const std::string& dbname,
     file = NULL;
 
     if (s.ok()) {
+      // Verify that the table is usable
       Iterator *it = table_cache->NewIterator(ReadOptions(),
                                               meta->number,
                                               meta->file_size);
@@ -66,6 +67,7 @@ Status BuildTable(const std::string& dbname,
     }
   }
 
+  // Check for input iterator errors
   if (!iter->status().ok()) {
     s = iter->status();
   }

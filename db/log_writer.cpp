@@ -1,3 +1,7 @@
+// Copyright (c) 2011 The LevelDB Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file. See the AUTHORS file for names of contributors.
+
 #include "db/log_writer.h"
 
 #include "leveldb/env.h"
@@ -22,19 +26,25 @@ Status Writer::AddRecord(const Slice &slice) {
   const char *ptr = slice.data();
   size_t left = slice.size();
 
+  // Fragment the record if necessary and emit it.  Note that if slice
+  // is empty, we still want to iterate once to emit a single
+  // zero-length record
   Status s;
   bool begin = true;
   do {
     const int leftover = kBlockSize - block_offset_;
     assert(leftover >= 0);
     if (leftover < kHeaderSize) {
+      // Switch to a new block
       if (leftover > 0) {
+        // Fill the trailer (literal below relies on kHeaderSize being 7)
         assert(kHeaderSize == 7);
         dest_->Append(Slice("\x00\x00\x00\x00\x00\x00", leftover));
       }
       block_offset_ = 0;
     }
 
+    // Invariant: we never leave < kHeaderSize bytes in a block.
     assert(kBlockSize - block_offset_ - kHeaderSize >= 0);
 
     const size_t avail = kBlockSize - block_offset_ - kHeaderSize;
@@ -60,7 +70,7 @@ Status Writer::AddRecord(const Slice &slice) {
   return s;
 }
 
-Status Writer::EmitPhysicalRecord(RecordType t, const char* ptr, size_t n) {
+Status Writer::EmitPhysicalRecord(RecordType t, const char *ptr, size_t n) {
   assert(n <= 0xffff);  // Must fit in two bytes
   assert(block_offset_ + kHeaderSize + n <= kBlockSize);
 

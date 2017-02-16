@@ -105,6 +105,7 @@ bool ParseFileName(const std::string& fname,
 
 Status SetCurrentFile(Env *env, const std::string &dbname,
                       uint64_t descriptor_number) {
+  // Remove leading "dbname/" and add newline to manifest file name
   std::string manifest = DescriptorFileName(dbname, descriptor_number);
   Slice contents = manifest;
   assert(contents.starts_with(dbname + "/"));
@@ -117,6 +118,7 @@ Status SetCurrentFile(Env *env, const std::string &dbname,
   if (!s.ok()) {
     env->DeleteFile(tmp);
   }
+  return s;
 }
 
-}
+} // end of namespace std

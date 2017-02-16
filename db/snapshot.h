@@ -15,7 +15,7 @@ class SnapshotList;
 // Each SnapshotImpl corresponds to a particular sequence number.
 class SnapshotImpl : public Snapshot {
 public:
-  SequenceNumber number_;
+  SequenceNumber number_; // const after creation
 
 private:
   friend class SnapshotList;

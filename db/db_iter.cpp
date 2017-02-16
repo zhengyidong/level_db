@@ -123,9 +123,10 @@ void DBIter::Next() {
     }
   }
 
+  // Temporarily use saved_key_ as storage for key to skip.
   std::string *skip = &saved_key_;
   SaveKey(ExtractUserKey(iter_->key()), skip);
-  FindNextUserKey(true, skip);
+  FindNextUserEntry(true, skip);
 }
 
 void DBIter::FindNextUserEntry(bool skipping, std::string* skip) {
@@ -192,7 +193,7 @@ void DBIter::FindPrevUserEntry() {
   if (iter_->Valid()) {
     do {
       ParsedInternalKey ikey;
-      if (ParseKey(ikey) && ikey.sequence <= sequence_) {
+      if (ParseKey(&ikey) && ikey.sequence <= sequence_) {
         if ((value_type != kTypeDeletion) &&
             user_comparator_->Compare(ikey.user_key, saved_key_) < 0) {
           // We encountered a non-deleted value in entries for previous keys,

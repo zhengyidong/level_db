@@ -12,6 +12,7 @@
 #include "leveldb/env.h"
 #include "table/merger.h"
 #include "table/two_level_iterator.h"
+#include "util/logging.h"
 
 namespace leveldb {
 
@@ -551,6 +552,27 @@ public:
     }
   }
 
+  ~Builder() {
+    for (int level = 0; level < config::kNumLevels; level++) {
+      const FileSet* added = levels_[level].added_files;
+      std::vector<FileMetaData*> to_unref;
+      to_unref.reserve(added->size());
+      for (FileSet::const_iterator it = added->begin();
+          it != added->end(); ++it) {
+        to_unref.push_back(*it);
+      }
+      delete added;
+      for (uint32_t i = 0; i < to_unref.size(); i++) {
+        FileMetaData* f = to_unref[i];
+        f->refs--;
+        if (f->refs <= 0) {
+          delete f;
+        }
+      }
+    }
+    base_->Unref();
+  }
+
   // Apply all of the edits in *edit to the current state.
   void Apply(VersionEdit *edit) {
     // Update compaction pointers
@@ -788,7 +810,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
 Status VersionSet::Recover() {
   struct LogReporter : public log::Reader::Reporter {
     Status *status;
-    virtual void Corruption(size_t bytes, const Status &status) {
+    virtual void Corruption(size_t bytes, const Status &s) {
       if (this->status->ok()) *this->status = s;
     }
   };
@@ -885,7 +907,7 @@ Status VersionSet::Recover() {
   }
 
   if (s.ok()) {
-    Version* v = new Version(this);
+    Version *v = new Version(this);
     builder.SaveTo(v);
     // Install recovered version
     Finalize(v);
@@ -896,8 +918,9 @@ Status VersionSet::Recover() {
     log_number_ = log_number;
     prev_log_number_ = prev_log_number;
   }
-}
 
+  return s;
+}
 
 void VersionSet::MarkFileNumberUsed(uint64_t number) {
   if (next_file_number_ <= number) {
@@ -1059,6 +1082,7 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
         // Create concatenating iterator for the files from this level
         list[num++] = NewTwoLevelIterator(
               new Version::LevelFileNumIterator(icmp_, &c->inputs_[which]),
+              &GetFileIterator, table_cache_, options
               );
       }
     }
@@ -1085,7 +1109,7 @@ Compaction *VersionSet::PickCompaction() {
     for (size_t i = 0; i < current_->files_[level].size(); ++i) {
       FileMetaData *f = current_->files_[level][i];
       if (compact_pointer_[level].empty() ||
-          icmp_(f->largest.Encode(), compact_pointer_[level]) > 0) {
+          icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) {
         c->inputs_[0].push_back(f);
         break;
       }

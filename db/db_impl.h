@@ -33,7 +33,10 @@ public:
   virtual Iterator* NewIterator(const ReadOptions&);
   virtual const Snapshot *GetSnapshot();
   virtual void ReleaseSnapshot(const Snapshot* snapshot);
+//  virtual bool GetProperty(const Slice& property, std::string* value);
+//  virtual void CompactRange(const Slice *begin, const Slice *end);
 private:
+  friend class DB;
   struct CompactionState;
   struct Writer;
 
@@ -47,12 +50,18 @@ private:
   // be made to the descriptor are added to *edit.
   Status Recover(VersionEdit *edit);
 
+  void MaybeIgnoreError(Status* s) const;
+
   // Delete any unneeded files and stale in-memory entries.
   void DeleteObsoleteFiles();
 
   // Compact the in-memory write buffer to disk.  Switches to a new
   // log-file/memtable and writes a new descriptor iff successful.
   Status CompactMemTable();
+
+  Status RecoverLogFile(uint64_t log_number,
+                        VersionEdit *edit,
+                        SequenceNumber *max_sequence);
 
   Status WriteLevel0Table(MemTable *mem, VersionEdit *edit, Version *base);
 

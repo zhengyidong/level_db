@@ -1,8 +1,13 @@
+// Copyright (c) 2011 The LevelDB Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file. See the AUTHORS file for names of contributors.
+
 #ifndef DB_DBFORMAT_H
 #define DB_DBFORMAT_H
 
 #include "leveldb/comparator.h"
 #include "leveldb/db.h"
+#include "leveldb/filter_policy.h"
 #include "leveldb/slice.h"
 #include "leveldb/table_builder.h"
 #include "util/coding.h"
@@ -31,44 +36,70 @@ static const int kL0_StopWritesTrigger = 12;
 // the largest level since that can generate a lot of wasted disk
 // space if the same key space is being repeatedly overwritten.
 static const int kMaxMemCompactLevel = 2;
-}
+
+} // end of namespace config
 
 class InternalKey;
 
+// Value types encoded as the last component of internal keys.
+// DO NOT CHANGE THESE ENUM VALUES: they are embedded in the on-disk
+// data structures.
 enum ValueType {
   kTypeDeletion = 0x0,
   kTypeValue = 0x1
 };
 
+// kValueTypeForSeek defines the ValueType that should be passed when
+// constructing a ParsedInternalKey object for seeking to a particular
+// sequence number (since we sort sequence numbers in decreasing order
+// and the value type is embedded as the low 8 bits in the sequence
+// number in internal keys, we need to use the highest-numbered
+// ValueType, not the lowest).
 static const ValueType kValueTypeForSeek = kTypeValue;
 typedef uint64_t SequenceNumber;
-static const SequenceNumber kMaxSequenceNumber = ((0x1ull << 56) - 1);
+static const SequenceNumber kMaxSequenceNumber =
+    ((0x1ull << 56) - 1);
 
 struct ParsedInternalKey {
   Slice user_key;
   SequenceNumber sequence;
   ValueType type;
 
-  ParsedInternalKey() {}
+  ParsedInternalKey() {}  // Intentionally left uninitialized (for speed)
   ParsedInternalKey(const Slice &u, const SequenceNumber &seq, ValueType t)
     :user_key(u), sequence(seq), type(t) {}
   std::string DebugString() const;
 };
 
-inline Slice ExtractUserKey(const Slice &internal_key) {
-  assert(internal_key.size() >= 8);
-  return Slice(internal_key.data(), internal_key.size() - 8);
+// Return the length of the encoding of "key".
+inline size_t InternalKeyEncodingLength(const ParsedInternalKey& key) {
+  return key.user_key.size() + 8;
 }
 
 // Append the serialization of "key" to *result.
-extern void AppendInternalKey(std::string *result, const ParsedInternalKey &key);
+extern void AppendInternalKey(std::string *result,
+                              const ParsedInternalKey &key);
 
 // Attempt to parse an internal key from "internal_key".  On success,
 // stores the parsed data in "*result", and returns true.
 //
 // On error, returns false, leaves "*result" in an undefined state.
-extern bool ParseInternalKey(const Slice& internal_key,
-                             ParsedInternalKey* result);
+extern bool ParseInternalKey(const Slice &internal_key,
+                             ParsedInternalKey *result);
+
+// Returns the user key portion of an internal key.
+inline Slice ExtractUserKey(const Slice &internal_key) {
+  assert(internal_key.size() >= 8);
+  return Slice(internal_key.data(), internal_key.size() - 8);
+}
+
+inline ValueType ExtractValueType(const Slice& internal_key) {
+  assert(internal_key.size() >= 8);
+  const size_t n = internal_key.size();
+  uint64_t num = DecodeFixed64(internal_key.data() + n - 8);
+  unsigned char c = num & 0xff;
+  return static_cast<ValueType>(c);
+}
 
 // A comparator for internal keys that uses a specified comparator for
 // the user key portion and breaks ties by decreasing sequence number.
@@ -80,24 +111,24 @@ public:
   virtual const char *Name() const;
   virtual int Compare(const Slice &a, const Slice &b) const;
   virtual void FindShortestSeparator(
-      std::string* start,
-      const Slice& limit) const;
-  virtual void FindShortSuccessor(std::string* key) const;
+      std::string *start,
+      const Slice &limit) const;
+  virtual void FindShortSuccessor(std::string *key) const;
 
   const Comparator *user_comparator() const { return user_comparator_; }
 
-  int Compare(const InternalKey& a, const InternalKey& b) const;
+  int Compare(const InternalKey &a, const InternalKey &b) const;
 };
 
 // Filter policy wrapper that converts from internal keys to user keys
 class InternalFilterPolicy : public FilterPolicy {
  private:
-  const FilterPolicy* const user_policy_;
+  const FilterPolicy *const user_policy_;
  public:
   explicit InternalFilterPolicy(const FilterPolicy* p) : user_policy_(p) { }
   virtual const char* Name() const;
-  virtual void CreateFilter(const Slice* keys, int n, std::string* dst) const;
-  virtual bool KeyMayMatch(const Slice& key, const Slice& filter) const;
+  virtual void CreateFilter(const Slice *keys, int n, std::string *dst) const;
+  virtual bool KeyMayMatch(const Slice &key, const Slice &filter) const;
 };
 
 // Modules in this directory should keep internal keys wrapped inside
@@ -107,7 +138,7 @@ class InternalKey {
 private:
   std::string rep_;
 public:
-  InternalKey() {}
+  InternalKey() {}   // Leave rep_ as empty to indicate it is invalid
   InternalKey(const Slice &user_key, SequenceNumber s, ValueType t) {
     AppendInternalKey(&rep_, ParsedInternalKey(user_key, s, t));
   }
@@ -150,17 +181,35 @@ inline bool ParseInternalKey(const Slice& internal_key,
 // A helper class useful for DBImpl::Get()
 class LookupKey {
 public:
+  // Initialize *this for looking up user_key at a snapshot with
+  // the specified sequence number.
   LookupKey(const Slice &user_key, SequenceNumber sequence);
+
   ~LookupKey();
+
+  // Return a key suitable for lookup in a MemTable.
   Slice memtable_key() const { return Slice(start_, end_ - start_); }
+
+  // Return an internal key (suitable for passing to an internal iterator)
   Slice internal_key() const { return Slice(kstart_, end_ - kstart_); }
+
+  // Return the user key
   Slice user_key() const { return Slice(kstart_, end_ - kstart_ - 8); }
+
 private:
+  // We construct a char array of the form:
+  //    klength  varint32               <-- start_
+  //    userkey  char[klength]          <-- kstart_
+  //    tag      uint64
+  //                                    <-- end_
+  // The array is a suitable MemTable key.
+  // The suffix starting with "userkey" can be used as an InternalKey.
   const char *start_;
   const char *kstart_;
   const char *end_;
-  char space_[200];
+  char space_[200]; // Avoid allocation for short keys
 
+  // No copying allowed
   LookupKey(const LookupKey&);
   void operator=(const LookupKey&);
 };

@@ -3,6 +3,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 //
 // Log format information shared by reader and writer.
+// See ../doc/log_format.txt for more detail.
 
 #ifndef DB_LOG_FORMAT_H
 #define DB_LOG_FORMAT_H

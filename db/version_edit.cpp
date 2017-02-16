@@ -194,17 +194,17 @@ Status VersionEdit::DecodeFrom(const Slice &src) {
       msg = "unknown tag";
       break;
     }
-
-    if (msg == NULL && !input.empty()) {
-      msg = "invalid tag";
-    }
-
-    Status result;
-    if (msg != NULL) {
-      result = Status::Corruption("VersionEdit", msg);
-    }
-    return result;
   }
+
+  if (msg == NULL && !input.empty()) {
+    msg = "invalid tag";
+  }
+
+  Status result;
+  if (msg != NULL) {
+    result = Status::Corruption("VersionEdit", msg);
+  }
+  return result;
 }
 
 std::string VersionEdit::DebugString() const {

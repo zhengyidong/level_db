@@ -4,9 +4,11 @@
 
 #include "db/db_impl.h"
 
+#include <algorithm>
 #include "db/builder.h"
 #include "db/db_iter.h"
 #include "db/filename.h"
+#include "db/log_reader.h"
 #include "db/log_writer.h"
 #include "db/memtable.h"
 #include "db/dbformat.h"
@@ -189,6 +191,15 @@ Status DBImpl::NewDB() {
   return s;
 }
 
+void DBImpl::MaybeIgnoreError(Status* s) const {
+  if (s->ok() || options_.paranoid_checks) {
+    // No change needed
+  } else {
+    Log(options_.info_log, "Ignoring error %s", s->ToString().c_str());
+    *s = Status::OK();
+  }
+}
+
 void DBImpl::DeleteObsoleteFiles() {
   std::set<uint64_t> live = pending_outputs_;
   versions_->AddLiveFiles(&live);
@@ -251,6 +262,7 @@ Status DBImpl::Recover(VersionEdit *edit) {
   if (!env_->FileExists(CurrentFileName(dbname_))) {
     if (options_.create_if_missing) {
       s = NewDB();
+
       if (!s.ok()) {
         return s;
       }
@@ -266,54 +278,223 @@ Status DBImpl::Recover(VersionEdit *edit) {
   }
 
   s = versions_->Recover();
+  if (s.ok()) {
+    SequenceNumber max_sequence(0);
 
-  // TODO
-}
+    // Recover from all newer log files than the ones named in the
+    // descriptor (new log files may have been added by the previous
+    // incarnation without registering them in the descriptor).
+    //
+    // Note that PrevLogNumber() is no longer used, but we pay
+    // attention to it in case we are recovering a database
+    // produced by an older version of leveldb.
+    const uint64_t min_log = versions_->LogNumber();
+    const uint64_t prev_log = versions_->PrevLogNumber();
+    std::vector<std::string> filenames;
+    s = env_->GetChildren(dbname_, &filenames);
+    if (!s.ok()) {
+      return s;
+    }
+    uint64_t number;
+    FileType type;
+    std::vector<uint64_t> logs;
+    for (size_t i = 0; i < filenames.size(); ++i) {
+      if (ParseFileName(filenames[i], &number, &type)
+          && type == kLogFile
+          && ((number >= min_log) || (number == prev_log))) {
+        logs.push_back(number);
+      }
+    }
 
-Status DBImpl::Get(const ReadOptions& options,
-                   const Slice& key,
-                   std::string* value) {
-  Status s;
-  MutexLock l(&mutex_);
-  SequenceNumber snapshot;
-  if (options.snapshot != NULL) {
-    snapshot = reinterpret_cast<const SnapshotImpl*>(options.snapshot)->number_;
-  } else {
-    snapshot = versions_->LastSequence();
+    // Recover in the order in which the logs were generated
+    std::sort(logs.begin(), logs.end());
+    for (size_t i = 0; i < logs.size(); i++) {
+      s = RecoverLogFile(logs[i], edit, &max_sequence);
+
+      // The previous incarnation may not have written any MANIFEST
+      // records after allocating this log number.  So we manually
+      // update the file number allocation counter in VersionSet.
+      versions_->MarkFileNumberUsed(logs[i]);
+    }
+
+    if (s.ok()) {
+      if (versions_->LastSequence() < max_sequence) {
+        versions_->SetLastSequence(max_sequence);
+      }
+    }
   }
 
-  MemTable *mem = mem_;
-  MemTable *imm = imm_;
-  Version *current = versions_->current();
-  mem->Ref();
-  if (imm != NULL) imm->Ref();
-  current->Ref();
+  return s;
+}
 
-  bool have_stat_update = false;
-  Version::GetStats stats;
+Status DBImpl::RecoverLogFile(uint64_t log_number,
+                              VersionEdit *edit,
+                              SequenceNumber *max_sequence) {
+  struct LogReporter : public log::Reader::Reporter {
+    Env *env;
+    Logger *info_log;
+    const char *fname;
+    Status *status;  // NULL if options_.paranoid_checks==false
+    virtual void Corruption(size_t bytes, const Status &s) {
+      Log(info_log, "%s%s: dropping %d bytes; %s",
+          (this->status == NULL ? "(ignoring error) " : ""),
+          fname, static_cast<int>(bytes), s.ToString().c_str());
+      if (this->status != NULL && this->status->ok()) *this->status = s;
+    }
+  };
 
-  // Unlock while reading from files and memtables
+  mutex_.AssertHeld();
+
+  // Open the log file
+  std::string fname = LogFileName(dbname_, log_number);
+  SequentialFile* file;
+  Status status = env_->NewSequentialFile(fname, &file);
+  if (!status.ok()) {
+    MaybeIgnoreError(&status);
+    return status;
+  }
+
+  // Create the log reader.
+  LogReporter reporter;
+  reporter.env = env_;
+  reporter.info_log = options_.info_log;
+  reporter.fname = fname.c_str();
+  reporter.status = (options_.paranoid_checks ? &status : NULL);
+  // We intentially make log::Reader do checksumming even if
+  // paranoid_checks==false so that corruptions cause entire commits
+  // to be skipped instead of propagating bad information (like overly
+  // large sequence numbers).
+  log::Reader reader(file, &reporter, true/*checksum*/,
+                     0/*initial_offset*/);
+  Log(options_.info_log, "Recovering log #%llu",
+      (unsigned long long) log_number);
+
+  // Read all the records and add to a memtable
+  std::string scratch;
+  Slice record;
+  WriteBatch batch;
+  MemTable *mem = NULL;
+  while (reader.ReadRecord(&record, &scratch) &&
+         status.ok()) {
+    if (record.size() < 12) {
+      reporter.Corruption(
+          record.size(), Status::Corruption("log record too small"));
+      continue;
+    }
+    WriteBatchInternal::SetContents(&batch, record);
+
+    if (mem == NULL) {
+      mem = new MemTable(internal_comparator_);
+      mem->Ref();
+    }
+    status = WriteBatchInternal::InsertInto(&batch, mem);
+    MaybeIgnoreError(&status);
+    if (!status.ok()) {
+      break;
+    }
+    const SequenceNumber last_seq =
+        WriteBatchInternal::Sequence(&batch) +
+        WriteBatchInternal::Count(&batch) - 1;
+    if (last_seq > *max_sequence) {
+      *max_sequence = last_seq;
+    }
+
+    if (mem->ApproximateMemoryUsage() > options_.write_buffer_size) {
+      status = WriteLevel0Table(mem, edit, NULL);
+      if (!status.ok()) {
+        // Reflect errors immediately so that conditions like full
+        // file-systems cause the DB::Open() to fail.
+        break;
+      }
+      mem->Unref();
+      mem = NULL;
+    }
+  }
+
+  if (status.ok() && mem != NULL) {
+    status = WriteLevel0Table(mem, edit, NULL);
+    // Reflect errors immediately so that conditions like full
+    // file-systems cause the DB::Open() to fail.
+  }
+
+  if (mem != NULL) mem->Unref();
+  delete file;
+  return status;
+}
+
+Status DBImpl::WriteLevel0Table(MemTable *mem, VersionEdit *edit,
+                                Version *base) {
+  mutex_.AssertHeld();
+  const uint64_t start_micros = env_->NowMicros();
+  FileMetaData meta;
+  meta.number = versions_->NewFileNumber();
+  pending_outputs_.insert(meta.number);
+  Iterator *iter = mem->NewIterator();
+  Log(options_.info_log, "Level-0 table #%llu: started",
+      (unsigned long long) meta.number);
+
+  Status s;
   {
     mutex_.Unlock();
-    // First look in the memtable, then in the immutable memtable (if any).
-    LookupKey lkey(key, snapshot);
-    if (mem->Get(lkey, value, &s)) {
-      // Done
-    } else if (imm != NULL && imm->Get(lkey, value, &s)) {
-      // Done
-    } else {
-      s = current->Get(options, lkey, value, &stats);
-      have_stat_update = true;
-    }
+    s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
     mutex_.Lock();
   }
 
-  if (have_stat_update && current->UpdateStats(stats)) {
-    MaybeScheduleCompaction();
+  Log(options_.info_log, "Level-0 table #%llu: %lld bytes %s",
+      (unsigned long long) meta.number,
+      (unsigned long long) meta.file_size,
+      s.ToString().c_str());
+  delete iter;
+  pending_outputs_.erase(meta.number);
+
+  int level = 0;
+  if (s.ok() && meta.file_size > 0) {
+    const Slice min_user_key = meta.smallest.user_key();
+    const Slice max_user_key = meta.largest.user_key();
+    if (base != NULL) {
+      level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
+    }
+    edit->AddFile(level, meta.number, meta.file_size,
+                  meta.smallest, meta.largest);
   }
-  mem->Unref();
-  if (imm != NULL) imm->Unref();
-  current->Unref();
+
+  CompactionStats stats;
+  stats.micros = env_->NowMicros() - start_micros;
+  stats.bytes_written = meta.file_size;
+  stats_[level].Add(stats);
+  return s;
+}
+
+Status DBImpl::CompactMemTable() {
+  mutex_.AssertHeld();
+  assert(imm_ != NULL);
+
+  // Save the contents of the memtable as a new Table
+  VersionEdit edit;
+  Version *base = versions_->current();
+  base->Ref();
+  Status s = WriteLevel0Table(imm_, &edit, base);
+  base->Unref();
+
+  if (s.ok() && shutting_down_.Acquire_Load()) {
+    s = Status::IOError("Deleting DB during memtable compaction");
+  }
+
+  // Replace immutable memtable with the generated Table
+  if (s.ok()) {
+    edit.SetPrevLogNumber(0);
+    edit.SetLogNumber(logfile_number_);  // Earlier logs no longer needed
+    s = versions_->LogAndApply(&edit, &mutex_);
+  }
+
+  if (s.ok()) {
+    // Commit to the new state
+    imm_->Unref();
+    imm_ = NULL;
+    has_imm_.Release_Store(NULL);
+    DeleteObsoleteFiles();
+  }
+
   return s;
 }
 
@@ -444,94 +625,6 @@ Status DBImpl::BackgroundCompaction() {
     manual_compaction_ = NULL;
   }
   return status;
-}
-
-Status DBImpl::WriteLevel0Table(MemTable *mem, VersionEdit *edit,
-                                Version *base) {
-  mutex_.AssertHeld();
-  const uint64_t start_micros = env_->NowMicros();
-  FileMetaData meta;
-  meta.number = versions_->NewFileNumber();
-  pending_outputs_.insert(meta.number);
-  Iterator *iter = mem->NewIterator();
-  Log(options_.info_log, "Level-0 table #%llu: started",
-      (unsigned long long) meta.number);
-
-  Status s;
-  {
-    mutex_.Unlock();
-    s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
-    mutex_.Lock();
-  }
-
-  Log(options_.info_log, "Level-0 table #%llu: %lld bytes %s",
-      (unsigned long long) meta.number,
-      (unsigned long long) meta.file_size,
-      s.ToString().c_str());
-  delete iter;
-  pending_outputs_.erase(meta.number);
-
-  int level = 0;
-  if (s.ok() && meta.file_size > 0) {
-    const Slice min_user_key = meta.smallest.user_key();
-    const Slice max_user_key = meta.largest.user_key();
-    if (base != NULL) {
-      level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
-    }
-    edit->AddFile(level, meta.number, meta.file_size,
-                  meta.smallest, meta.largest);
-  }
-
-  CompactionStats stats;
-  stats.micros = env_->NowMicros() - start_micros;
-  stats.bytes_written = meta.file_size;
-  stats_[level].Add(stats);
-  return s;
-}
-
-Status DBImpl::CompactMemTable() {
-  mutex_.AssertHeld();
-  assert(imm_ != NULL);
-
-  // Save the contents of the memtable as a new Table
-  VersionEdit edit;
-  Version *base = versions_->current();
-  base->Ref();
-  Status s = WriteLevel0Table(imm_, &edit, base);
-  base->Unref();
-
-  if (s.ok() && shutting_down_.Acquire_Load()) {
-    s = Status::IOError("Deleting DB during memtable compaction");
-  }
-
-  // Replace immutable memtable with the generated Table
-  if (s.ok()) {
-    edit.SetPrevLogNumber(0);
-    edit.SetLogNumber(logfile_number_);  // Earlier logs no longer needed
-    s = versions_->LogAndApply(&edit, &mutex_);
-  }
-
-  if (s.ok()) {
-    // Commit to the new state
-    imm_->Unref();
-    imm_ = NULL;
-    has_imm_.Release_Store(NULL);
-    DeleteObsoleteFiles();
-  }
-
-  return s;
-}
-
-
-DB::~DB() {}
-
-Status DB::Open(const Options &options, const std::string &name, DB **dbptr) {
-  //  // TODO
-  //  *dbptr = NULL;
-
-  //  DBImpl *impl = new DBImpl(options, name);
-  //  impl->mutex_.Lock();
-  //  VersionEdit edit;
 }
 
 void DBImpl::CleanupCompaction(CompactionState* compact) {
@@ -846,6 +939,53 @@ Iterator* DBImpl::NewInternalIterator(const ReadOptions& options,
   return internal_iter;
 }
 
+Status DBImpl::Get(const ReadOptions& options,
+                   const Slice& key,
+                   std::string* value) {
+  Status s;
+  MutexLock l(&mutex_);
+  SequenceNumber snapshot;
+  if (options.snapshot != NULL) {
+    snapshot = reinterpret_cast<const SnapshotImpl*>(options.snapshot)->number_;
+  } else {
+    snapshot = versions_->LastSequence();
+  }
+
+  MemTable *mem = mem_;
+  MemTable *imm = imm_;
+  Version *current = versions_->current();
+  mem->Ref();
+  if (imm != NULL) imm->Ref();
+  current->Ref();
+
+  bool have_stat_update = false;
+  Version::GetStats stats;
+
+  // Unlock while reading from files and memtables
+  {
+    mutex_.Unlock();
+    // First look in the memtable, then in the immutable memtable (if any).
+    LookupKey lkey(key, snapshot);
+    if (mem->Get(lkey, value, &s)) {
+      // Done
+    } else if (imm != NULL && imm->Get(lkey, value, &s)) {
+      // Done
+    } else {
+      s = current->Get(options, lkey, value, &stats);
+      have_stat_update = true;
+    }
+    mutex_.Lock();
+  }
+
+  if (have_stat_update && current->UpdateStats(stats)) {
+    MaybeScheduleCompaction();
+  }
+  mem->Unref();
+  if (imm != NULL) imm->Unref();
+  current->Unref();
+  return s;
+}
+
 Iterator* DBImpl::NewIterator(const ReadOptions& options) {
   SequenceNumber latest_snapshot;
   Iterator *internal_iter = NewInternalIterator(options, &latest_snapshot);
@@ -856,7 +996,7 @@ Iterator* DBImpl::NewIterator(const ReadOptions& options) {
        : latest_snapshot));
 }
 
-const Snapshot* DBImpl::GetSnapshot() {
+const Snapshot *DBImpl::GetSnapshot() {
   MutexLock l(&mutex_);
   return snapshots_.New(versions_->LastSequence());
 }
@@ -1062,4 +1202,73 @@ Status DB::Delete(const WriteOptions& opt, const Slice& key) {
   return Write(opt, &batch);
 }
 
+DB::~DB() {}
+
+Status DB::Open(const Options &options, const std::string &dbname,
+                DB **dbptr) {
+  *dbptr = NULL;
+
+  DBImpl *impl = new DBImpl(options, dbname);
+  impl->mutex_.Lock();
+  VersionEdit edit;
+  Status s = impl->Recover(&edit); // Handles create_if_missing, error_if_exist
+  if (s.ok()) {
+    uint64_t new_log_number = impl->versions_->NewFileNumber();
+    WritableFile *lfile;
+    s = options.env->NewWritableFile(LogFileName(dbname, new_log_number),
+                                     &lfile);
+    if (s.ok()) {
+      edit.SetLogNumber(new_log_number);
+      impl->logfile_ = lfile;
+      impl->logfile_number_ = new_log_number;
+      impl->log_ = new log::Writer(lfile);
+      s = impl->versions_->LogAndApply(&edit, &impl->mutex_);
+    }
+    if (s.ok()) {
+      impl->DeleteObsoleteFiles();
+      impl->MaybeScheduleCompaction();
+    }
+  }
+  impl->mutex_.Unlock();
+  if (s.ok()) {
+    *dbptr = impl;
+  } else {
+    delete impl;
+  }
+  return s;
 }
+
+Snapshot::~Snapshot() {}
+
+Status DestroyDB(const std::string& dbname, const Options& options) {
+  Env* env = options.env;
+  std::vector<std::string> filenames;
+  // Ignore error in case directory does not exist
+  env->GetChildren(dbname, &filenames);
+  if (filenames.empty()) {
+    return Status::OK();
+  }
+
+  FileLock* lock;
+  const std::string lockname = LockFileName(dbname);
+  Status result = env->LockFile(lockname, &lock);
+  if (result.ok()) {
+    uint64_t number;
+    FileType type;
+    for (size_t i = 0; i < filenames.size(); i++) {
+      if (ParseFileName(filenames[i], &number, &type) &&
+          type != kDBLockFile) {  // Lock file will be deleted at end
+        Status del = env->DeleteFile(dbname + "/" + filenames[i]);
+        if (result.ok() && !del.ok()) {
+          result = del;
+        }
+      }
+    }
+    env->UnlockFile(lock);  // Ignore error since state is already gone
+    env->DeleteFile(lockname);
+    env->DeleteDir(dbname);  // Ignore error in case dir contains other files
+  }
+  return result;
+}
+
+} // end of namespace leveldb

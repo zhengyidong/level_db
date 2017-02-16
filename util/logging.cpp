@@ -24,6 +24,12 @@ void AppendEscapedStringTo(std::string* str, const Slice& value) {
   }
 }
 
+std::string NumberToString(uint64_t num) {
+  std::string r;
+  AppendNumberTo(&r, num);
+  return r;
+}
+
 std::string EscapeString(const Slice& value) {
   std::string r;
   AppendEscapedStringTo(&r, value);
